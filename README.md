@@ -2,7 +2,7 @@
 Daily aggregated turbine and process logs from a biomass-fuelled palm oil plant (2016–2023) for power forecasting
 # Steam Turbine Power Forecasting Dataset (2016–2023)
 
-**Caption / Summary:**  
+**Summary:**  
 Daily-aggregated turbine and process measurements from a biomass-fuelled palm oil mill (2016–2023).  
 Prepared to support research on non-linear steam turbine **power forecasting** and **biomass resource optimization**.
 

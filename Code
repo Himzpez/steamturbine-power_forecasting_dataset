@@ -213,13 +213,13 @@ input_dim = 1
 input_layer = Input(shape=(time_step, input_dim))
 
 # LSTM Branch with L2 Regularization and Batch Normalization
-lstm_out = Bidirectional(LSTM(units=50, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
+lstm_out = Bidirectional(LSTM(units=64, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
 attention_probs_lstm = Dense(time_step, activation='softmax', name='attention_probs_lstm')(lstm_out)
 attention_mul_lstm = Multiply(name='attention_mul_lstm')([lstm_out, attention_probs_lstm])
 batch_norm_lstm = BatchNormalization()(attention_mul_lstm)
 
 # GRU Branch with L2 Regularization and Batch Normalization
-gru_out = Bidirectional(GRU(units=50, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
+gru_out = Bidirectional(GRU(units=64, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
 attention_probs_gru = Dense(time_step, activation='softmax', name='attention_probs_gru')(gru_out)
 attention_mul_gru = Multiply(name='attention_mul_gru')([gru_out, attention_probs_gru])
 batch_norm_gru = BatchNormalization()(attention_mul_gru)
@@ -229,7 +229,7 @@ concat_out = Concatenate(name='concatenation_layer')([batch_norm_lstm[:, -1, :],
 batch_norm_concat = BatchNormalization()(concat_out)
 
 # Dropout for regularization
-dropout = Dropout(0.6)(batch_norm_concat)
+dropout = Dropout(0.2)(batch_norm_concat)
 
 # Output layer
 output_layer = Dense(units=1, kernel_regularizer=l2(1e-4), name='output_layer')(dropout)
@@ -238,7 +238,7 @@ output_layer = Dense(units=1, kernel_regularizer=l2(1e-4), name='output_layer')(
 model = Model(inputs=input_layer, outputs=output_layer)
 
 # Compile model with gradient clipping
-optimizer = Adam(learning_rate=0.0001, clipnorm=1.0)
+optimizer = Adam(learning_rate=0.001, clipnorm=1.0)
 model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mean_squared_error', 'mean_absolute_error'])
 
 # Learning rate scheduler

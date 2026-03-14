@@ -1,0 +1,334 @@
+# Imports
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from matplotlib import style
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import r2_score, mean_squared_error
+import math
+
+from keras.models import Model
+from keras.layers import Input, Dense, Dropout, MultiHeadAttention, LayerNormalization, Add
+from keras.optimizers import Adam
+from keras.callbacks import EarlyStopping
+
+import tensorflow as tf
+
+# Importing Data
+df = pd.read_csv("finalupdated.csv")
+
+print("Return first 5 rows.\n")
+print(df.head())
+
+print("Return last 5 rows.\n")
+print(df.tail())
+
+df.info()
+print(df.describe(), "\n")
+
+
+# ===============================
+# Feature Engineering
+# ===============================
+dataset = df
+
+dataset["Month"] = pd.to_datetime(df["DateTime"]).dt.month
+dataset["Year"] = pd.to_datetime(df["DateTime"]).dt.year
+dataset["Date"] = pd.to_datetime(df["DateTime"]).dt.date
+dataset["Time"] = pd.to_datetime(df["DateTime"]).dt.time
+dataset["Day"] = pd.to_datetime(df["DateTime"]).dt.day_name()
+
+dataset = df.set_index("DateTime")
+dataset.index = pd.to_datetime(dataset.index)
+
+dataset.head()
+
+print("Total Number of Years:", dataset.Year.nunique())
+print(dataset.Year.unique())
+
+# Remove incomplete weeks
+dataset = dataset[71:-121]
+
+
+# ===============================
+# Visualization
+# ===============================
+fig = plt.figure()
+axes1 = plt.subplot2grid((1,1), (0,0))
+
+style.use("ggplot")
+sns.lineplot(x=dataset["Year"], y=dataset["kVA_value"], data=dataset)
+
+sns.set(rc={'figure.figsize': (20,10)})
+
+plt.title("Power generation of ST")
+plt.xlabel("Date")
+plt.ylabel("Power in kVA")
+plt.grid(True)
+
+for label in axes1.xaxis.get_ticklabels():
+    label.set_rotation(90)
+
+plt.figure(figsize=(15,10))
+plt.plot(dataset["kVA_value"])
+
+
+# ===============================
+# Energy Consumption Each Year
+# ===============================
+fig = plt.figure(figsize=(30,30))
+
+ax1 = fig.add_subplot(611)
+ax2 = fig.add_subplot(612)
+ax3 = fig.add_subplot(613)
+ax4 = fig.add_subplot(614)
+ax5 = fig.add_subplot(615)
+ax6 = fig.add_subplot(616)
+
+y_2018 = dataset.loc["2018"]["kVA_value"].to_list()
+x_2018 = dataset.loc["2018"]["Date"].to_list()
+ax1.plot(x_2018, y_2018, linewidth=1.7)
+
+y_2019 = dataset.loc["2019"]["kVA_value"].to_list()
+x_2019 = dataset.loc["2019"]["Date"].to_list()
+ax2.plot(x_2019, y_2019, linewidth=1.7)
+
+y_2020 = dataset.loc["2020"]["kVA_value"].to_list()
+x_2020 = dataset.loc["2020"]["Date"].to_list()
+ax3.plot(x_2020, y_2020, linewidth=1.7)
+
+y_2021 = dataset.loc["2021"]["kVA_value"].to_list()
+x_2021 = dataset.loc["2021"]["Date"].to_list()
+ax4.plot(x_2021, y_2021, linewidth=1.7)
+
+y_2022 = dataset.loc["2022"]["kVA_value"].to_list()
+x_2022 = dataset.loc["2022"]["Date"].to_list()
+ax5.plot(x_2022, y_2022, linewidth=1.7)
+
+y_2023 = dataset.loc["2023"]["kVA_value"].to_list()
+x_2023 = dataset.loc["2023"]["Date"].to_list()
+ax6.plot(x_2023, y_2023, linewidth=1.7)
+
+plt.title("Power generation of ST")
+plt.xlabel("Date")
+plt.ylabel("Power in kVA")
+plt.grid(True)
+
+# Distribution plot
+plt.figure(figsize=(15,10))
+sns.histplot(dataset["kVA_value"], kde=True)
+plt.title("Power generation distribution")
+
+
+# ===============================
+# Resampling Daily Data
+# ===============================
+numeric_columns = dataset.select_dtypes(include=np.number)
+NewDataSet = numeric_columns.resample('D').mean()
+
+print("Old Dataset:", dataset.shape)
+print("New Dataset:", NewDataSet.shape)
+
+# ===============================
+# NaN Checking
+# ===============================
+has_nan = NewDataSet.isnull().values.any()
+print("Are there any NaN values?", has_nan)
+
+print("NaN values per column:")
+print(NewDataSet.isnull().sum())
+
+print("Total number of NaN values:", NewDataSet.isnull().sum().sum())
+
+# Fill NaN values
+cleaned_dataset = NewDataSet.fillna(method='ffill')
+
+print("Shape after filling NaN:", cleaned_dataset.shape)
+
+# ===============================
+# Preparing Target Variable
+# ===============================
+y = cleaned_dataset["kVA_value"]
+
+# Normalize
+scaler = MinMaxScaler(feature_range=(0,1))
+y = scaler.fit_transform(np.array(y).reshape(-1,1))
+
+print("Normalized data:")
+print(y[:10])
+
+
+# ===============================
+# Train / Test / Validation Split
+# ===============================
+training_size = int(len(y)*0.80)
+test_size = len(y)-training_size
+val_size = int(training_size*0.20)
+
+train_data = y[0:training_size-val_size,:]
+test_data = y[training_size:len(y),:1]
+val_data = y[len(y)-test_size-val_size:len(y)-test_size,:1]
+
+
+# ===============================
+# Dataset Creation Function
+# ===============================
+def create_dataset(dataset, time_step=1):
+    dataX, dataY = [], []
+
+    for i in range(len(dataset)-time_step-1):
+        a = dataset[i:(i+time_step),0]
+        dataX.append(a)
+        dataY.append(dataset[i+time_step,0])
+
+    return np.array(dataX), np.array(dataY)
+
+
+time_step = 100
+
+X_train, y_train = create_dataset(train_data, time_step)
+X_test, ytest = create_dataset(test_data, time_step)
+X_val, yval = create_dataset(val_data, time_step)
+
+X_train = X_train.reshape(X_train.shape[0],X_train.shape[1],1)
+X_test = X_test.reshape(X_test.shape[0],X_test.shape[1],1)
+X_val = X_val.reshape(X_val.shape[0],X_val.shape[1],1)
+
+
+# ===============================
+# Transformer Model
+# ===============================
+input_layer = Input(shape=(time_step,1))
+
+embedding_layer = Dense(64, activation='linear')(input_layer)
+
+attn_output_1 = MultiHeadAttention(num_heads=8, key_dim=64)(embedding_layer, embedding_layer)
+attn_output_1 = Dropout(0.2)(attn_output_1)
+attn_output_1 = Add()([attn_output_1, embedding_layer])
+attn_output_1 = LayerNormalization(epsilon=1e-6)(attn_output_1)
+
+ffn_output_1 = Dense(2048, activation='relu')(attn_output_1)
+ffn_output_1 = Dense(64)(ffn_output_1)
+ffn_output_1 = Dropout(0.2)(ffn_output_1)
+ffn_output_1 = Add()([ffn_output_1, attn_output_1])
+ffn_output_1 = LayerNormalization(epsilon=1e-6)(ffn_output_1)
+
+attn_output_2 = MultiHeadAttention(num_heads=8, key_dim=64)(ffn_output_1, ffn_output_1)
+attn_output_2 = Dropout(0.2)(attn_output_2)
+attn_output_2 = Add()([attn_output_2, ffn_output_1])
+attn_output_2 = LayerNormalization(epsilon=1e-6)(attn_output_2)
+
+ffn_output_2 = Dense(2048, activation='relu')(attn_output_2)
+ffn_output_2 = Dense(64)(ffn_output_2)
+ffn_output_2 = Dropout(0.2)(ffn_output_2)
+ffn_output_2 = Add()([ffn_output_2, attn_output_2])
+ffn_output_2 = LayerNormalization(epsilon=1e-6)(ffn_output_2)
+
+output_layer = Dense(1, activation='linear')(ffn_output_2)
+
+model = Model(inputs=input_layer, outputs=output_layer)
+
+model.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss='mean_squared_error',
+    metrics=['mean_squared_error']
+)
+
+early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+history = model.fit(
+    X_train, y_train,
+    epochs=150,
+    batch_size=32,
+    validation_data=(X_val, yval),
+    callbacks=[early_stopping]
+)
+
+# ===============================
+# Evaluation
+# ===============================
+test_loss, test_mse = model.evaluate(X_test, ytest)
+
+rmse = np.sqrt(test_mse)
+print("Test RMSE:", rmse)
+
+y_pred = model.predict(X_test)
+
+r_squared = r2_score(ytest.reshape(-1), y_pred.reshape(-1))
+print("Test R²:", r_squared)
+
+
+# ===============================
+# Loss Plot
+# ===============================
+plt.figure(figsize=(10,10))
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('Model loss')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.legend(['Train','Validation'])
+plt.show()
+
+
+# ===============================
+# Predictions
+# ===============================
+train_predict = model.predict(X_train)
+test_predict = model.predict(X_test)
+val_predict = model.predict(X_val)
+
+train_predict = scaler.inverse_transform(train_predict)
+test_predict = scaler.inverse_transform(test_predict)
+val_predict = scaler.inverse_transform(val_predict)
+
+
+# ===============================
+# Future 30-Day Prediction
+# ===============================
+x_input = test_data[337:].reshape(1,-1)
+temp_input = list(x_input)[0].tolist()
+
+lst_output=[]
+n_steps=100
+i=0
+
+while(i<30):
+
+    if(len(temp_input)>100):
+
+        x_input=np.array(temp_input[1:])
+        x_input=x_input.reshape(1,-1)
+        x_input=x_input.reshape((1,n_steps,1))
+
+        yhat=model.predict(x_input,verbose=0)
+
+        temp_input.extend(yhat[0].tolist())
+        temp_input=temp_input[1:]
+
+        lst_output.extend(yhat.tolist())
+        i=i+1
+
+    else:
+
+        x_input=x_input.reshape((1,n_steps,1))
+        yhat=model.predict(x_input,verbose=0)
+
+        temp_input.extend(yhat[0].tolist())
+        lst_output.extend(yhat.tolist())
+        i=i+1
+
+
+day_new=np.arange(1,101)
+day_pred=np.arange(101,131)
+
+plt.figure(figsize=(15,10))
+plt.plot(day_new,scaler.inverse_transform(y[2071:]))
+plt.plot(day_pred,scaler.inverse_transform(lst_output))
+
+plt.xlabel("Days")
+plt.ylabel("Generation kVA")
+
+print(scaler.inverse_transform(lst_output))

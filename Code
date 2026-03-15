@@ -247,8 +247,22 @@ lr_scheduler = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min
 # Summary of the model
 model.summary()
 
-# Train model (replace with your actual dataset)
-history = model.fit(X_train, y_train, epochs=150, batch_size=32, validation_split=0.3, callbacks=[lr_scheduler])
+from keras.callbacks import EarlyStopping
+
+early_stop = EarlyStopping(
+    monitor='val_loss',
+    patience=15,
+    restore_best_weights=True
+)
+
+history = model.fit(
+    X_train,
+    y_train,
+    epochs=150,
+    batch_size=32,
+    validation_split=0.3,
+    callbacks=[lr_scheduler, early_stop]
+)
 
 # Evaluate model
 evaluation = model.evaluate(X_test, ytest)

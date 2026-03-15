@@ -48,7 +48,6 @@ dataset.head()
 print("Total Number of Years:", dataset.Year.nunique())
 print(dataset.Year.unique())
 
-# Remove incomplete weeks
 dataset = dataset[71:-121]
 
 
@@ -116,7 +115,6 @@ plt.xlabel("Date")
 plt.ylabel("Power in kVA")
 plt.grid(True)
 
-# Distribution plot
 plt.figure(figsize=(15,10))
 sns.histplot(dataset["kVA_value"], kde=True)
 plt.title("Power generation distribution")
@@ -131,6 +129,7 @@ NewDataSet = numeric_columns.resample('D').mean()
 print("Old Dataset:", dataset.shape)
 print("New Dataset:", NewDataSet.shape)
 
+
 # ===============================
 # NaN Checking
 # ===============================
@@ -143,16 +142,16 @@ print(NewDataSet.isnull().sum())
 print("Total number of NaN values:", NewDataSet.isnull().sum().sum())
 
 # Fill NaN values
-cleaned_dataset = NewDataSet.fillna(method='ffill')
+cleaned_dataset = NewDataSet.ffill()
 
 print("Shape after filling NaN:", cleaned_dataset.shape)
+
 
 # ===============================
 # Preparing Target Variable
 # ===============================
 y = cleaned_dataset["kVA_value"]
 
-# Normalize
 scaler = MinMaxScaler(feature_range=(0,1))
 y = scaler.fit_transform(np.array(y).reshape(-1,1))
 
@@ -161,7 +160,7 @@ print(y[:10])
 
 
 # ===============================
-# Train / Test / Validation Split
+# Train / Test / Validation 
 # ===============================
 training_size = int(len(y)*0.80)
 test_size = len(y)-training_size
@@ -176,6 +175,7 @@ val_data = y[len(y)-test_size-val_size:len(y)-test_size,:1]
 # Dataset Creation Function
 # ===============================
 def create_dataset(dataset, time_step=1):
+
     dataX, dataY = [], []
 
     for i in range(len(dataset)-time_step-1):
@@ -197,105 +197,126 @@ X_test = X_test.reshape(X_test.shape[0],X_test.shape[1],1)
 X_val = X_val.reshape(X_val.shape[0],X_val.shape[1],1)
 
 
-import numpy as np
-from keras.models import Model
-from keras.layers import Input, Bidirectional, LSTM, GRU, Dense, Dropout, Multiply, Concatenate, BatchNormalization
+# ===============================
+# Rolling-Origin Cross Validation
+# ===============================
+
+from keras.layers import Bidirectional, LSTM, GRU, Multiply, Concatenate, BatchNormalization
 from keras.regularizers import l2
-from keras.optimizers import Adam
 from keras.callbacks import ReduceLROnPlateau
-from sklearn.metrics import r2_score
 
-# Example data shape
-time_step = 100
-input_dim = 1
+folds = 5
+fold_size = int(len(X_train) / folds)
 
-# Input layer
-input_layer = Input(shape=(time_step, input_dim))
+histories = []
 
-# LSTM Branch with L2 Regularization and Batch Normalization
-lstm_out = Bidirectional(LSTM(units=64, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
-attention_probs_lstm = Dense(time_step, activation='softmax', name='attention_probs_lstm')(lstm_out)
-attention_mul_lstm = Multiply(name='attention_mul_lstm')([lstm_out, attention_probs_lstm])
-batch_norm_lstm = BatchNormalization()(attention_mul_lstm)
+for fold in range(folds):
 
-# GRU Branch with L2 Regularization and Batch Normalization
-gru_out = Bidirectional(GRU(units=64, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
-attention_probs_gru = Dense(time_step, activation='softmax', name='attention_probs_gru')(gru_out)
-attention_mul_gru = Multiply(name='attention_mul_gru')([gru_out, attention_probs_gru])
-batch_norm_gru = BatchNormalization()(attention_mul_gru)
+    print(f"\nTraining Fold {fold+1}/{folds}")
 
-# Concatenate outputs of both branches
-concat_out = Concatenate(name='concatenation_layer')([batch_norm_lstm[:, -1, :], batch_norm_gru[:, -1, :]])
-batch_norm_concat = BatchNormalization()(concat_out)
+    input_layer = Input(shape=(time_step,1))
 
-# Dropout for regularization
-dropout = Dropout(0.2)(batch_norm_concat)
+    lstm_out = Bidirectional(LSTM(64, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
+    attention_probs_lstm = Dense(time_step, activation='softmax')(lstm_out)
+    attention_mul_lstm = Multiply()([lstm_out, attention_probs_lstm])
+    batch_norm_lstm = BatchNormalization()(attention_mul_lstm)
 
-# Output layer
-output_layer = Dense(units=1, kernel_regularizer=l2(1e-4), name='output_layer')(dropout)
+    gru_out = Bidirectional(GRU(64, return_sequences=True, kernel_regularizer=l2(1e-4)))(input_layer)
+    attention_probs_gru = Dense(time_step, activation='softmax')(gru_out)
+    attention_mul_gru = Multiply()([gru_out, attention_probs_gru])
+    batch_norm_gru = BatchNormalization()(attention_mul_gru)
 
-# Define model
-model = Model(inputs=input_layer, outputs=output_layer)
+    concat_out = Concatenate()([batch_norm_lstm[:,-1,:], batch_norm_gru[:,-1,:]])
+    batch_norm_concat = BatchNormalization()(concat_out)
 
-# Compile model with gradient clipping
-optimizer = Adam(learning_rate=0.001, clipnorm=1.0)
-model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mean_squared_error', 'mean_absolute_error'])
+    dropout = Dropout(0.2)(batch_norm_concat)
 
-# Learning rate scheduler
-lr_scheduler = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
+    output_layer = Dense(1, kernel_regularizer=l2(1e-4))(dropout)
 
-# Summary of the model
-model.summary()
+    model = Model(inputs=input_layer, outputs=output_layer)
 
-from keras.callbacks import EarlyStopping
+    optimizer = Adam(learning_rate=0.001, clipnorm=1.0)
 
-early_stop = EarlyStopping(
-    monitor='val_loss',
-    patience=15,
-    restore_best_weights=True
-)
+    model.compile(
+        optimizer=optimizer,
+        loss='mean_squared_error',
+        metrics=['mean_squared_error','mean_absolute_error']
+    )
 
-history = model.fit(
-    X_train,
-    y_train,
-    epochs=150,
-    batch_size=32,
-    validation_split=0.3,
-    callbacks=[lr_scheduler, early_stop]
-)
+    lr_scheduler = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=5,
+        min_lr=1e-6
+    )
 
-# Evaluate model
-evaluation = model.evaluate(X_test, ytest)
+    early_stop = EarlyStopping(
+        monitor='val_loss',
+        patience=15,
+        restore_best_weights=True
+    )
 
-# Print results
-print("Test Loss:", evaluation[0])
-print("Test Mean Squared Error (MSE):", evaluation[1])
-print("Test Mean Absolute Error (MAE):", evaluation[2])
-# Predict on test data
+    train_end = fold_size * (fold + 1)
+
+    X_train_fold = X_train[:train_end]
+    y_train_fold = y_train[:train_end]
+
+    X_val_fold = X_train[train_end:min(train_end + fold_size,len(X_train))]
+    y_val_fold = y_train[train_end:min(train_end + fold_size,len(y_train))]
+
+    history = model.fit(
+        X_train_fold,
+        y_train_fold,
+        epochs=150,
+        batch_size=32,
+        validation_data=(X_val_fold,y_val_fold),
+        callbacks=[lr_scheduler,early_stop],
+        verbose=1
+    )
+
+    histories.append(history)
+
+
+# ===============================
+# Model Evaluation
+# ===============================
+
+evaluation = model.evaluate(X_test,ytest)
+
+print("Test Loss:",evaluation[0])
+print("Test MSE:",evaluation[1])
+print("Test MAE:",evaluation[2])
+
 y_pred = model.predict(X_test)
 
-# Calculate R-squared (R²)
-r_squared = r2_score(ytest, y_pred)
-print("Test R-squared (R²):", r_squared)
--------------------------------------
+r_squared = r2_score(ytest,y_pred)
+
+print("Test R2:",r_squared)
 
 
 # ===============================
 # Loss Plot
 # ===============================
+
+history = histories[-1]
+
 plt.figure(figsize=(10,10))
+
 plt.plot(history.history['loss'])
 plt.plot(history.history['val_loss'])
+
 plt.title('Model loss')
 plt.ylabel('Loss')
 plt.xlabel('Epoch')
 plt.legend(['Train','Validation'])
+
 plt.show()
 
 
 # ===============================
 # Predictions
 # ===============================
+
 train_predict = model.predict(X_train)
 test_predict = model.predict(X_test)
 val_predict = model.predict(X_val)
@@ -308,11 +329,15 @@ val_predict = scaler.inverse_transform(val_predict)
 # ===============================
 # Future 30-Day Prediction
 # ===============================
-x_input = test_data[337:].reshape(1,-1)
+
+x_input = test_data[-100:].reshape(1,-1)
+
 temp_input = list(x_input)[0].tolist()
 
 lst_output=[]
+
 n_steps=100
+
 i=0
 
 while(i<30):
@@ -329,15 +354,19 @@ while(i<30):
         temp_input=temp_input[1:]
 
         lst_output.extend(yhat.tolist())
+
         i=i+1
 
     else:
 
         x_input=x_input.reshape((1,n_steps,1))
+
         yhat=model.predict(x_input,verbose=0)
 
         temp_input.extend(yhat[0].tolist())
+
         lst_output.extend(yhat.tolist())
+
         i=i+1
 
 
@@ -345,7 +374,8 @@ day_new=np.arange(1,101)
 day_pred=np.arange(101,131)
 
 plt.figure(figsize=(15,10))
-plt.plot(day_new,scaler.inverse_transform(y[2071:]))
+
+plt.plot(day_new,scaler.inverse_transform(y[-100:]))
 plt.plot(day_pred,scaler.inverse_transform(lst_output))
 
 plt.xlabel("Days")
